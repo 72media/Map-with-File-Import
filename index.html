@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Advanced Map with File Import Support</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+  <style>
+    /* Your existing CSS styles remain unchanged */
+    html, body, #map { height: 100%; margin: 0; padding: 0; }
+    .leaflet-popup-content { max-width: 640px !important; max-height: 500px; overflow-y: auto; }
+    .leaflet-popup-content iframe { width: 100% !important; height: auto !important; aspect-ratio: 16 / 9; border: none; }
+    .marker-content { margin-top: 10px; }
+    .controls { position: absolute; top: 10px; left: 8.5%; transform: translateX(-50%); background: white; color: black; z-index: 1000; padding: 10px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.2); max-width: 200px; text-align: center; }
+    .controls input, .controls button { display: block; margin-top: 5px; width: 100%; }
+    .toggle-btn { position: absolute; top: 10px; left: 55px; z-index: 1100; padding: 5px 10px; background: white; color: black; border: none; border-radius: 6px; cursor: pointer; box-shadow: 0 2px 5px rgba(0,0,0,0.3); }
+    .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 2000; justify-content: center; align-items: center; }
+    .modal-content { background: white; color: black; padding: 20px; border-radius: 10px; width: 400px; max-width: 90%; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+    .modal-content h2 { margin-top: 0; }
+    .modal-content input, .modal-content textarea { width: 100%; margin-bottom: 10px; padding: 8px; border-radius: 4px; border: 1px solid #ccc; }
+    .modal-content button { padding: 8px 15px; margin-right: 10px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    .html-hint { font-size: 0.8em; color: #666; margin-bottom: 10px; }
+  </style>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.5/purify.min.js"></script>
+  <!-- Add required libraries for file import -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/togeojson/0.16.0/togeojson.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+</head>
+<body>
+
+<!-- Your existing HTML remains unchanged -->
+<button class="toggle-btn" onclick="toggleControls()">☰</button>
+<div class="controls hidden" id="toolbox">
+  <label>📂 Upload File
+    <input type="file" id="file" accept=".geojson,.json,.kml,.gpx" multiple />
+  </label>
+  <button id="saveGeoJSON">💾 Export to GeoJSON</button>
+  <button id="clear">🧹 Clear</button>
+  <button id="reset">🔄 Reset View</button>
+</div>
+
+<div id="map"></div>
+
+<div class="modal" id="markerModal">
+  <div class="modal-content">
+    <h2>Add Marker Details</h2>
+    <label for="markerTitle">Title:</label>
+    <input type="text" id="markerTitle" placeholder="Enter title" />
+    
+    <label for="markerDesc">Description:</label>
+    <textarea id="markerDesc" placeholder='Enter description (HTML allowed)' rows="6"></textarea>
+    <p class="html-hint">ใส่ HTML ได้ เช่น iframe จาก Google Drive หรือ YouTube</p>
+    
+    <button onclick="saveMarkerDetails()">Save</button>
+    <button onclick="cancelMarkerDetails()">Cancel</button>
+  </div>
+</div>
+
+<script>
+const defaultView = [13.736717, 100.523186];
+const map = L.map('map').setView(defaultView, 6);
+
+L.tileLayer('https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}', {
+  maxZoom: 19
+}).addTo(map);
+
+const drawnItems = new L.FeatureGroup().addTo(map);
+
+const drawControl = new L.Control.Draw({
+  edit: { featureGroup: drawnItems },
+  draw: { marker: true }
+});
+map.addControl(drawControl);
+
+let currentLayer = null;
+
+// Your existing functions remain unchanged until the file import section
+
+// Fixed file import functionality
+document.getElementById('file').addEventListener('change', function(e) {
+  const files = e.target.files;
+  if (files.length === 0) return;
+  
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    const reader = new FileReader();
+    
+    reader.onload = function(e) {
+      const content = e.target.result;
+      try {
+        let geojson;
+        let layer;
+        
+        if (file.name.endsWith('.geojson') || file.name.endsWith('.json')) {
+          // Handle GeoJSON files
+          geojson = JSON.parse(content);
+        } else if (file.name.endsWith('.kml')) {
+          // Handle KML files
+          const parser = new DOMParser();
+          const xml = parser.parseFromString(content, 'text/xml');
+          geojson = toGeoJSON.kml(xml);
+        } else if (file.name.endsWith('.gpx')) {
+          // Handle GPX files - fixed this part
+          const parser = new DOMParser();
+          const xml = parser.parseFromString(content, 'text/xml');
+          geojson = toGeoJSON.gpx(xml);
+        } else {
+          throw new Error('Unsupported file format');
+        }
+        
+        // Create layer from GeoJSON
+        layer = L.geoJSON(geojson, {
+          onEachFeature: function(feature, layer) {
+            if (feature.properties) {
+              // Create popup content from properties
+              let popupContent = '';
+              if (feature.properties.name) {
+                popupContent += `<b>${feature.properties.name}</b><br>`;
+              }
+              if (feature.properties.desc) {
+                popupContent += `${feature.properties.desc}`;
+              }
+              // Add other properties
+              for (const key in feature.properties) {
+                if (key !== 'name' && key !== 'desc') {
+                  popupContent += `${key}: ${feature.properties[key]}<br>`;
+                }
+              }
+              if (popupContent) {
+                layer.bindPopup(popupContent);
+              }
+            }
+          }
+        });
+        
+        if (layer) {
+          drawnItems.addLayer(layer);
+          map.fitBounds(layer.getBounds());
+        }
+      } catch (error) {
+        console.error('Error parsing file:', error);
+        alert('Error parsing file: ' + error.message);
+      }
+    };
+    
+    // Read the file as text
+    reader.readAsText(file);
+  }
+});
+
+// Your remaining existing JavaScript remains unchanged
+// (showMarkerModal, saveMarkerDetails, cancelMarkerDetails, toggleControls, etc.)
+
+// Export to GeoJSON
+document.getElementById('saveGeoJSON').addEventListener('click', function() {
+  if (drawnItems.getLayers().length === 0) {
+    alert('No data to export');
+    return;
+  }
+  
+  const geoJson = drawnItems.toGeoJSON();
+  const geoJsonStr = JSON.stringify(geoJson, null, 2);
+  const blob = new Blob([geoJsonStr], { type: 'application/json' });
+  saveAs(blob, 'map-data.geojson');
+});
+</script>
+
+</body>
+</html>
