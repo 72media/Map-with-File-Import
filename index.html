@@ -21,6 +21,13 @@
       aspect-ratio: 16 / 9;
       border: none;
     }
+    
+    /* Style for the video player */
+    .leaflet-popup-content video {
+      width: 100% !important;
+      height: auto !important;
+      background-color: #000;
+    }
 
     .marker-content {
       margin-top: 10px;
@@ -115,12 +122,25 @@
     .hidden {
       display: none;
     }
+    .full-screen-btn {
+        display: block;
+        margin: 10px auto 0 auto;
+        padding: 8px 15px;
+        background-color: transparent; /* ลบพื้นหลัง */
+        color: white; /* ตัวอักษรสีขาว */
+        font-size: 1.2em; /* เพิ่มขนาดตัวอักษร */
+        text-decoration: none;
+        border-radius: 4px;
+        text-align: center;
+        font-weight: bold;
+    }
   </style>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.5/purify.min.js"></script>
-  <!-- New library for handling KML, GPX, and GeoJSON file uploads -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-omnivore/0.3.4/leaflet-omnivore.min.js"></script>
+  <!-- HLS.js for playing .m3u8 video streams -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
 </head>
 <body>
 
@@ -222,7 +242,8 @@ function saveMarkerDetails() {
   // Check if a YouTube URL was found and create a button to open in a new tab
   let fullScreenButton = '';
   if (youtubeUrl) {
-    fullScreenButton = `<br><br><a href="${youtubeUrl}" target="_blank" style="display: inline-block; padding: 8px 15px; background-color: #ff0000; color: white; text-decoration: none; border-radius: 4px;">ดูแบบเต็มหน้าจอ</a>`;
+    // Changed to white font color and transparent background here
+    fullScreenButton = `<br><br><a href="${youtubeUrl}" target="_blank" style="display: inline-block; padding: 8px 15px; background-color: transparent; color: white; text-decoration: none; border-radius: 4px;">ดูแบบเต็มหน้าจอ</a>`;
   }
   
   const popupContent = `
@@ -296,7 +317,6 @@ document.getElementById('file').addEventListener('change', function (e) {
                 layer = omnivore.gpx.parse(content);
             }
         } catch (error) {
-            // Use a modal or a custom message box instead of alert()
             const modal = document.createElement('div');
             modal.style = "position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; z-index: 2001; box-shadow: 0 2px 10px rgba(0,0,0,0.3);";
             modal.innerHTML = `
@@ -309,16 +329,58 @@ document.getElementById('file').addEventListener('change', function (e) {
         
         if (layer) {
             layer.addTo(drawnItems);
-            // Fix: Add a check for description and name from the KML file
             layer.eachLayer(function(l) {
                 if (l.feature && l.feature.properties) {
                     let popupContent = "";
+                    const description = l.feature.properties.description || '';
+                    const m3u8UrlMatch = description.match(/(https?:\/\/[^\s]+\.m3u8)/);
+
                     if (l.feature.properties.name) {
                         popupContent += `<b>${l.feature.properties.name}</b><br>`;
                     }
-                    if (l.feature.properties.description) {
-                        popupContent += l.feature.properties.description;
+
+                    if (m3u8UrlMatch) {
+                        const m3u8Url = m3u8UrlMatch[0];
+                        // Construct the video player for m3u8 streams
+                        popupContent += `
+                          <div class="marker-content">
+                            <video id="hls-video-${L.stamp(l)}" class="hls-video-player" controls muted></video>
+                            <a href="${m3u8Url}" target="_blank" class="full-screen-btn">ดูเต็มจอ</a>
+                          </div>
+                        `;
+
+                        // Add a popupopen listener to initialize the Hls player when the popup is opened
+                        l.on('popupopen', function() {
+                          const video = document.getElementById(`hls-video-${L.stamp(l)}`);
+                          if (Hls.isSupported() && video) {
+                            var hls = new Hls();
+                            hls.loadSource(m3u8Url);
+                            hls.attachMedia(video);
+                            hls.on(Hls.Events.MANIFEST_PARSED, function() {
+                              video.play();
+                            });
+                          } else if (video && video.canPlayType('application/vnd.apple.mpegurl')) {
+                            video.src = m3u8Url;
+                            video.addEventListener('loadedmetadata', function() {
+                              video.play();
+                            });
+                          }
+                        });
+                    } else if (description) {
+                        // Regular description with potential YouTube iframe
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = description;
+                        const iframe = tempDiv.querySelector('iframe');
+                        let fullScreenButton = '';
+                        if (iframe) {
+                          const src = iframe.getAttribute('src');
+                          if (src && src.includes('youtube.com/embed')) {
+                            fullScreenButton = `<br><br><a href="${src}" target="_blank" style="display: inline-block; padding: 8px 15px; background-color: transparent; color: white; text-decoration: none; border-radius: 4px;">ดูแบบเต็มหน้าจอ</a>`;
+                          }
+                        }
+                        popupContent += `<div class="marker-content">${description}${fullScreenButton}</div>`;
                     }
+                    
                     if (popupContent) {
                         l.bindPopup(popupContent, {
                           maxWidth: 660,
@@ -328,12 +390,10 @@ document.getElementById('file').addEventListener('change', function (e) {
                 }
             });
 
-            // Check if the layer has valid bounds before trying to fit them
             const bounds = layer.getBounds();
             if (bounds.isValid()) {
                 map.fitBounds(bounds);
             } else {
-                // If bounds are not valid, log a warning and don't try to fit the map
                 console.warn('The imported layer does not have valid geographical bounds.');
             }
         } else {
