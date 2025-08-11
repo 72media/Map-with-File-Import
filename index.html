@@ -29,7 +29,7 @@
     .controls {
       position: absolute;
       top: 10px;
-      left: 8.5%;
+      left: 10.5%;
       transform: translateX(-50%);
       background: white;
       color: black;
@@ -112,15 +112,20 @@
       color: #666;
       margin-bottom: 10px;
     }
+    .hidden {
+      display: none;
+    }
   </style>
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.0.5/purify.min.js"></script>
+  <!-- New library for handling KML, GPX, and GeoJSON file uploads -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-omnivore/0.3.4/leaflet-omnivore.min.js"></script>
 </head>
 <body>
 
 <button class="toggle-btn" onclick="toggleControls()">☰</button>
-<div class="controls hidden" id="toolbox">
+<div class="controls" id="toolbox">
   <label>📂 Upload File
     <input type="file" id="file" accept=".geojson,.json,.kml,.gpx" />
   </label>
@@ -131,7 +136,7 @@
 
 <div id="map"></div>
 
-<!-- Modal สำหรับกรอกข้อมูลหมุด -->
+<!-- Modal to add marker details -->
 <div class="modal" id="markerModal">
   <div class="modal-content">
     <h2>Add Marker Details</h2>
@@ -140,10 +145,20 @@
     
     <label for="markerDesc">Description:</label>
     <textarea id="markerDesc" placeholder='Enter description (HTML allowed)' rows="6"></textarea>
-    <p class="html-hint">ใส่ HTML ได้ เช่น iframe จาก Google Drive หรือ YouTube</p>
+    <p class="html-hint">You can insert HTML, such as iframes from Google Drive or YouTube.</p>
     
     <button onclick="saveMarkerDetails()">Save</button>
     <button onclick="cancelMarkerDetails()">Cancel</button>
+  </div>
+</div>
+
+<!-- Modal to confirm clearing all layers -->
+<div class="modal" id="clearConfirmModal">
+  <div class="modal-content">
+    <h2>Confirm Clear</h2>
+    <p>Are you sure you want to clear all layers and markers?</p>
+    <button onclick="confirmClear()">Clear</button>
+    <button onclick="cancelClear()">Cancel</button>
   </div>
 </div>
 
@@ -159,7 +174,7 @@ const drawnItems = new L.FeatureGroup().addTo(map);
 
 const drawControl = new L.Control.Draw({
   edit: { featureGroup: drawnItems },
-  draw: { marker: true }
+  draw: { marker: true, polyline: true, polygon: true, circle: true, rectangle: true }
 });
 map.addControl(drawControl);
 
@@ -170,6 +185,9 @@ map.on(L.Draw.Event.CREATED, function (e) {
   if (e.layerType === 'marker') {
     currentLayer = layer;
     showMarkerModal();
+  } else {
+    // Add other shapes directly to the drawnItems layer group
+    drawnItems.addLayer(layer);
   }
 });
 
@@ -188,11 +206,29 @@ function saveMarkerDetails() {
     ALLOWED_TAGS: ['a', 'p', 'div', 'br', 'iframe', 'img', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'em', 'ul', 'ol', 'li'],
     ALLOWED_ATTR: ['href', 'src', 'width', 'height', 'frameborder', 'allowfullscreen', 'target', 'style', 'allow']
   });
+  
+  // Use a temporary div to check for an iframe and extract the src
+  const tempDiv = document.createElement('div');
+  tempDiv.innerHTML = cleanDesc;
+  const iframe = tempDiv.querySelector('iframe');
+  let youtubeUrl = null;
+  if (iframe) {
+    const src = iframe.getAttribute('src');
+    if (src && src.includes('youtube.com/embed')) {
+      youtubeUrl = src;
+    }
+  }
 
+  // Check if a YouTube URL was found and create a button to open in a new tab
+  let fullScreenButton = '';
+  if (youtubeUrl) {
+    fullScreenButton = `<br><br><a href="${youtubeUrl}" target="_blank" style="display: inline-block; padding: 8px 15px; background-color: #ff0000; color: white; text-decoration: none; border-radius: 4px;">ดูแบบเต็มหน้าจอ</a>`;
+  }
+  
   const popupContent = `
     <div style="max-width:640px;">
       <b>${title}</b><br>
-      <div class="marker-content">${cleanDesc}</div>
+      <div class="marker-content">${cleanDesc}${fullScreenButton}</div>
     </div>
   `;
 
@@ -218,14 +254,100 @@ function toggleControls() {
   document.getElementById('toolbox').classList.toggle('hidden');
 }
 
+// Replaced confirm() with a custom modal dialog
 document.getElementById('clear').addEventListener('click', () => {
-  if (confirm('Clear all markers?')) {
-    drawnItems.clearLayers();
-  }
+  document.getElementById('clearConfirmModal').style.display = 'flex';
 });
+
+// Function to handle the "Clear" button in the confirmation modal
+function confirmClear() {
+  drawnItems.clearLayers();
+  document.getElementById('clearConfirmModal').style.display = 'none';
+}
+
+// Function to handle the "Cancel" button in the confirmation modal
+function cancelClear() {
+  document.getElementById('clearConfirmModal').style.display = 'none';
+}
 
 document.getElementById('reset').addEventListener('click', () => {
   map.setView(defaultView, 6);
+});
+
+// New code for file upload
+document.getElementById('file').addEventListener('change', function (e) {
+    const file = e.target.files[0];
+    if (!file) {
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = function (event) {
+        const content = event.target.result;
+        const extension = file.name.split('.').pop().toLowerCase();
+
+        let layer;
+        try {
+            if (extension === 'geojson' || extension === 'json') {
+                layer = L.geoJSON(JSON.parse(content));
+            } else if (extension === 'kml') {
+                layer = omnivore.kml.parse(content);
+            } else if (extension === 'gpx') {
+                layer = omnivore.gpx.parse(content);
+            }
+        } catch (error) {
+            // Use a modal or a custom message box instead of alert()
+            const modal = document.createElement('div');
+            modal.style = "position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; z-index: 2001; box-shadow: 0 2px 10px rgba(0,0,0,0.3);";
+            modal.innerHTML = `
+              <p>Error parsing file: ${error.message}</p>
+              <button onclick="this.parentElement.remove()">Close</button>
+            `;
+            document.body.appendChild(modal);
+            return;
+        }
+        
+        if (layer) {
+            layer.addTo(drawnItems);
+            // Fix: Add a check for description and name from the KML file
+            layer.eachLayer(function(l) {
+                if (l.feature && l.feature.properties) {
+                    let popupContent = "";
+                    if (l.feature.properties.name) {
+                        popupContent += `<b>${l.feature.properties.name}</b><br>`;
+                    }
+                    if (l.feature.properties.description) {
+                        popupContent += l.feature.properties.description;
+                    }
+                    if (popupContent) {
+                        l.bindPopup(popupContent, {
+                          maxWidth: 660,
+                          minWidth: 320
+                        });
+                    }
+                }
+            });
+
+            // Check if the layer has valid bounds before trying to fit them
+            const bounds = layer.getBounds();
+            if (bounds.isValid()) {
+                map.fitBounds(bounds);
+            } else {
+                // If bounds are not valid, log a warning and don't try to fit the map
+                console.warn('The imported layer does not have valid geographical bounds.');
+            }
+        } else {
+            const modal = document.createElement('div');
+            modal.style = "position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); background: white; padding: 20px; border-radius: 10px; z-index: 2001; box-shadow: 0 2px 10px rgba(0,0,0,0.3);";
+            modal.innerHTML = `
+              <p>Unsupported file type or invalid content!</p>
+              <button onclick="this.parentElement.remove()">Close</button>
+            `;
+            document.body.appendChild(modal);
+        }
+    };
+
+    reader.readAsText(file);
 });
 </script>
 
